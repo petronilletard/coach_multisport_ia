@@ -59,7 +59,7 @@ def meteo(ville: str, jours: int = 7) -> list[dict]:
 
 def token_strava() -> str:
     """Renvoie un access token Strava valide, en le renouvelant si besoin."""
-    with open("DONNEES/tokens.json") as f:
+    with open(DONNEES / "tokens.json") as f:
         tokens = json.load(f)
 
     # Encore valable plus d'une minute ? On le garde.
@@ -85,13 +85,14 @@ def token_strava() -> str:
         "refresh_token": nouveau["refresh_token"],
         "expires_at": nouveau["expires_at"],
     }
-    with open("tokens.json", "w") as f:
+    with open(DONNEES / "tokens.json", "w") as f:
         json.dump(tokens, f, indent=2)
     return tokens["access_token"]
 
 def activites_recentes(jours: int = 7) -> list[dict]:
     """Activités Strava des derniers jours (natation, course, vélo, etc.).
-    Utile pour faire le bilan de la semaine et repérer la fatigue."""
+    Utile pour faire le bilan de la semaine et repérer la fatigue.
+    Pour la course, allure_min_km donne l'allure moyenne (ex. 6:30 = 6 min 30 s par km)."""
     depuis = int(time.time()) - jours * 24 * 3600
 
     r = requests.get(
@@ -104,7 +105,7 @@ def activites_recentes(jours: int = 7) -> list[dict]:
 
     activites = []
     for a in r.json():
-        activites.append({
+        activite = {
             "date": a["start_date_local"][:10],
             "sport": a["sport_type"],
             "nom": a["name"],
@@ -112,12 +113,18 @@ def activites_recentes(jours: int = 7) -> list[dict]:
             "duree_min": round(a["moving_time"] / 60),
             "denivele_m": a.get("total_elevation_gain"),
             "fc_moyenne": a.get("average_heartrate"),
-        })
+        }
+        # Pour la course : l'allure moyenne en min/km, calculée par le code
+        if a["sport_type"] in ("Run", "TrailRun", "VirtualRun") and a["distance"] > 0:
+            secondes_par_km = a["moving_time"] / (a["distance"] / 1000)
+            minutes, secondes = divmod(round(secondes_par_km), 60)
+            activite["allure_min_km"] = f"{minutes}:{secondes:02d}"
+        activites.append(activite)
     return activites
 
 def connexion() -> sqlite3.Connection:
     """Ouvre la base et crée la table des séances si elle n'existe pas encore."""
-    conn = sqlite3.connect("DONNEES/coach.db")
+    conn = sqlite3.connect(DONNEES / "coach.db")
     conn.row_factory = sqlite3.Row  # pour lire les lignes comme des dictionnaires
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seances (
