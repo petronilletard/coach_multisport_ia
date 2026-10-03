@@ -10,3 +10,7 @@ coach.db
 venv/
 .venv/
 __pycache__/
+
+# Fichiers système et sauvegardes
+.DS_Store
+*.bak
