@@ -6,6 +6,9 @@ import sqlite3
 from datetime import date, timedelta
 
 from dotenv import load_dotenv
+from pathlib import Path
+
+DONNEES = Path("donnees")
 
 load_dotenv()
 def coordonnees(ville: str) -> tuple[float, float]:
@@ -56,7 +59,7 @@ def meteo(ville: str, jours: int = 7) -> list[dict]:
 
 def token_strava() -> str:
     """Renvoie un access token Strava valide, en le renouvelant si besoin."""
-    with open("tokens.json") as f:
+    with open("DONNEES/tokens.json") as f:
         tokens = json.load(f)
 
     # Encore valable plus d'une minute ? On le garde.
@@ -114,7 +117,7 @@ def activites_recentes(jours: int = 7) -> list[dict]:
 
 def connexion() -> sqlite3.Connection:
     """Ouvre la base et crée la table des séances si elle n'existe pas encore."""
-    conn = sqlite3.connect("coach.db")
+    conn = sqlite3.connect("DONNEES/coach.db")
     conn.row_factory = sqlite3.Row  # pour lire les lignes comme des dictionnaires
     conn.execute("""
         CREATE TABLE IF NOT EXISTS seances (

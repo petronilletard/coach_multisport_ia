@@ -1,0 +1,12 @@
+# Secrets
+.env
+
+# Données personnelles
+donnees/
+tokens.json
+coach.db
+
+# Environnement Python
+venv/
+.venv/
+__pycache__/

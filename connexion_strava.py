@@ -3,6 +3,9 @@ import os
 
 import requests
 from dotenv import load_dotenv
+from pathlib import Path
+
+DONNEES = Path("donnees")
 
 load_dotenv()  # lit ton fichier .env
 CLIENT_ID = os.environ["STRAVA_CLIENT_ID"]
@@ -42,7 +45,7 @@ tokens = {
     "refresh_token": reponse["refresh_token"],
     "expires_at": reponse["expires_at"],
 }
-with open("tokens.json", "w") as f:
+with open("DONNEES/tokens.json", "w") as f:
     json.dump(tokens, f, indent=2)
 
 print(f"\n✅ Connectée en tant que {reponse['athlete']['firstname']} ! Jetons enregistrés.")
