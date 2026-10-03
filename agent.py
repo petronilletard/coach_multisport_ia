@@ -95,7 +95,7 @@ def agent(messages: list, max_tours: int = 10) -> str:
     for _ in range(max_tours):
         reponse = client.messages.create(
             model="claude-sonnet-5-5",
-            max_tokens=2000,
+            max_tokens=4000,
             system=SYSTEME,
             tools=OUTILS,
             messages=messages,
@@ -104,7 +104,12 @@ def agent(messages: list, max_tours: int = 10) -> str:
 
         # Le LLM n'a plus besoin d'outils : c'est sa réponse finale
         if reponse.stop_reason != "tool_use":
-            return "".join(b.text for b in reponse.content if b.type == "text")
+            texte = "".join(b.text for b in reponse.content if b.type == "text").strip()
+            if not texte:
+                # Réponse vide : on dit pourquoi au lieu de renvoyer du vide
+                print(f"⚠️ Réponse vide, stop_reason = {reponse.stop_reason}")
+                return f"Je n'ai pas réussi à rédiger ma réponse (raison : {reponse.stop_reason}). Réessaie."
+            return texte
 
         # Sinon, on exécute chaque outil demandé et on lui renvoie les résultats
         resultats = []

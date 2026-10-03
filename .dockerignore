@@ -4,3 +4,7 @@ venv/
 donnees/
 __pycache__/
 .git/
+.DS_Store
+*.bak
+tokens.json
+coach.db
