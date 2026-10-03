@@ -2,6 +2,8 @@ import json
 import os
 import time
 import requests
+import sqlite3
+from datetime import date, timedelta
 
 from dotenv import load_dotenv
 
@@ -110,6 +112,49 @@ def activites_recentes(jours: int = 7) -> list[dict]:
         })
     return activites
 
+def connexion() -> sqlite3.Connection:
+    """Ouvre la base et crée la table des séances si elle n'existe pas encore."""
+    conn = sqlite3.connect("coach.db")
+    conn.row_factory = sqlite3.Row  # pour lire les lignes comme des dictionnaires
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS seances (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            date      TEXT NOT NULL,
+            type      TEXT NOT NULL,
+            duree_min INTEGER NOT NULL,
+            ressenti  TEXT
+        )
+    """)
+    return conn
+
+def noter_seance(type: str, duree_min: int, ressenti: str = "", jour: str = "") -> str:
+    """Enregistre une séance que Strava ne capte pas bien (salle, Pilates…)
+    ou le ressenti d'une séance. jour au format AAAA-MM-JJ, aujourd'hui par défaut."""
+    if duree_min <= 0:
+        raise ValueError("La durée doit être positive.")
+    jour = jour or date.today().isoformat()
+
+    with connexion() as conn:
+        conn.execute(
+            "INSERT INTO seances (date, type, duree_min, ressenti) VALUES (?, ?, ?, ?)",
+            (jour, type, duree_min, ressenti),
+        )
+    return f"Séance enregistrée : {type}, {duree_min} min, le {jour}."
+
+def historique(semaines: int = 4) -> list[dict]:
+    """Séances notées à la main sur les dernières semaines (salle, Pilates, ressenti)."""
+    depuis = (date.today() - timedelta(weeks=semaines)).isoformat()
+
+    with connexion() as conn:
+        lignes = conn.execute(
+            "SELECT date, type, duree_min, ressenti FROM seances "
+            "WHERE date >= ? ORDER BY date",
+            (depuis,),
+        ).fetchall()
+    return [dict(l) for l in lignes]
+
 if __name__ == "__main__":
-    for activite in activites_recentes(14):
-        print(activite)
+    print(noter_seance("Pilates", 45, "un peu fatiguée", "2026-09-26"))
+    print(noter_seance("Salle", 60, "bonne énergie"))
+    for s in historique(2):
+        print(s)
