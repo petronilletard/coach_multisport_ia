@@ -123,7 +123,7 @@ def activites_recentes(jours: int = 7) -> list[dict]:
     return activites
 
 def connexion() -> sqlite3.Connection:
-    """Ouvre la base et crée la table des séances si elle n'existe pas encore."""
+    """Ouvre la base et crée les tables si elles n'existent pas encore."""
     conn = sqlite3.connect(DONNEES / "coach.db")
     conn.row_factory = sqlite3.Row  # pour lire les lignes comme des dictionnaires
     conn.execute("""
@@ -135,36 +135,85 @@ def connexion() -> sqlite3.Connection:
             ressenti  TEXT
         )
     """)
+    # Suppression "douce" : une séance annulée reste dans la base, marquée annulee = 1.
+    # Ajout de la colonne aux bases existantes (une seule fois).
+    colonnes = [c["name"] for c in conn.execute("PRAGMA table_info(seances)")]
+    if "annulee" not in colonnes:
+        conn.execute("ALTER TABLE seances ADD COLUMN annulee INTEGER NOT NULL DEFAULT 0")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ressentis (
+            id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            date  TEXT NOT NULL,
+            etat  TEXT NOT NULL
+        )
+    """)
     return conn
 
 def noter_seance(type: str, duree_min: int, ressenti: str = "", jour: str = "") -> str:
-    """Enregistre une séance que Strava ne capte pas bien (salle, Pilates…)
-    ou le ressenti d'une séance. jour au format AAAA-MM-JJ, aujourd'hui par défaut."""
+    """Enregistre un entraînement que Strava ne capte pas bien (salle, Pilates…),
+    avec éventuellement le ressenti pendant la séance.
+    Pas pour l'état général (malade, fatiguée) : utiliser noter_ressenti.
+    jour au format AAAA-MM-JJ, aujourd'hui par défaut."""
     if duree_min <= 0:
-        raise ValueError("La durée doit être positive.")
+        raise ValueError("La durée doit être positive. Pour un état sans séance, utilise noter_ressenti.")
     jour = jour or date.today().isoformat()
 
     with connexion() as conn:
-        conn.execute(
+        curseur = conn.execute(
             "INSERT INTO seances (date, type, duree_min, ressenti) VALUES (?, ?, ?, ?)",
             (jour, type, duree_min, ressenti),
         )
-    return f"Séance enregistrée : {type}, {duree_min} min, le {jour}."
+    return f"Séance n°{curseur.lastrowid} enregistrée : {type}, {duree_min} min, le {jour}."
 
-def historique(semaines: int = 4) -> list[dict]:
-    """Séances notées à la main sur les dernières semaines (salle, Pilates, ressenti)."""
+def noter_ressenti(etat: str, jour: str = "") -> str:
+    """Enregistre mon état général, sans séance : malade, fatiguée, en forme, douleur…
+    jour au format AAAA-MM-JJ, aujourd'hui par défaut."""
+    if not etat.strip():
+        raise ValueError("Le ressenti est vide.")
+    jour = jour or date.today().isoformat()
+
+    with connexion() as conn:
+        conn.execute("INSERT INTO ressentis (date, etat) VALUES (?, ?)", (jour, etat.strip()))
+    return f"Ressenti enregistré pour le {jour} : {etat.strip()}."
+
+def historique(semaines: int = 4) -> dict:
+    """Séances notées à la main (hors séances annulées) et ressentis des dernières semaines.
+    Chaque séance a un id, à utiliser pour supprimer_seance."""
     depuis = (date.today() - timedelta(weeks=semaines)).isoformat()
 
     with connexion() as conn:
-        lignes = conn.execute(
-            "SELECT date, type, duree_min, ressenti FROM seances "
-            "WHERE date >= ? ORDER BY date",
+        seances = conn.execute(
+            "SELECT id, date, type, duree_min, ressenti FROM seances "
+            "WHERE date >= ? AND annulee = 0 ORDER BY date",
             (depuis,),
         ).fetchall()
-    return [dict(l) for l in lignes]
+        ressentis = conn.execute(
+            "SELECT date, etat FROM ressentis WHERE date >= ? ORDER BY date",
+            (depuis,),
+        ).fetchall()
+    return {
+        "seances": [dict(l) for l in seances],
+        "ressentis": [dict(l) for l in ressentis],
+    }
+
+def supprimer_seance(id: int) -> str:
+    """Annule une séance notée à la main, à partir de son id (donné par historique).
+    Suppression douce : la séance reste dans la base, marquée comme annulée.
+    À n'utiliser qu'après une confirmation explicite de ma part."""
+    with connexion() as conn:
+        seance = conn.execute(
+            "SELECT id, date, type, duree_min, annulee FROM seances WHERE id = ?", (id,)
+        ).fetchone()
+        if seance is None:
+            raise ValueError(f"Aucune séance avec l'id {id}.")
+        if seance["annulee"]:
+            raise ValueError(f"La séance n°{id} est déjà annulée.")
+        conn.execute("UPDATE seances SET annulee = 1 WHERE id = ?", (id,))
+    return (f"Séance n°{id} annulée : {seance['type']}, {seance['duree_min']} min, "
+            f"le {seance['date']}.")
 
 if __name__ == "__main__":
-    print(noter_seance("Pilates", 45, "un peu fatiguée", "2026-09-26"))
-    print(noter_seance("Salle", 60, "bonne énergie"))
-    for s in historique(2):
-        print(s)
+    for cle, lignes in historique(2).items():
+        print(cle)
+        for l in lignes:
+            print("  ", l)

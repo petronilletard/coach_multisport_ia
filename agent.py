@@ -1,10 +1,14 @@
 import json
+import time
+import uuid
 from datetime import date
 
 import anthropic
 from dotenv import load_dotenv
 
-from outils import activites_recentes, historique, meteo, noter_seance
+from monitoring import enregistrer
+from outils import (activites_recentes, historique, meteo, noter_ressenti,
+                    noter_seance, supprimer_seance)
 
 load_dotenv()
 client = anthropic.Anthropic()  # lit ANTHROPIC_API_KEY dans l'environnement
@@ -37,8 +41,9 @@ OUTILS = [
     },
     {
         "name": "noter_seance",
-        "description": "Enregistre une séance que Strava ne capte pas bien (salle, Pilates) "
-                       "ou le ressenti d'une séance.",
+        "description": "Enregistre un entraînement que Strava ne capte pas bien (salle, Pilates), "
+                       "avec éventuellement le ressenti pendant la séance. "
+                       "Pas pour l'état général sans séance : utiliser noter_ressenti.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -52,12 +57,39 @@ OUTILS = [
     },
     {
         "name": "historique",
-        "description": "Séances notées à la main sur les dernières semaines (salle, Pilates, ressenti).",
+        "description": "Séances notées à la main (avec leur id) et ressentis "
+                       "(état général) des dernières semaines.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "semaines": {"type": "integer", "description": "Nombre de semaines à remonter"},
             },
+        },
+    },
+    {
+        "name": "noter_ressenti",
+        "description": "Enregistre mon état général, sans séance : malade, fatiguée, "
+                       "en forme, douleur…",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "etat": {"type": "string", "description": "Ex. malade avec de la fièvre"},
+                "jour": {"type": "string", "description": "Format AAAA-MM-JJ, aujourd'hui par défaut"},
+            },
+            "required": ["etat"],
+        },
+    },
+    {
+        "name": "supprimer_seance",
+        "description": "Annule une séance notée à la main, à partir de son id (voir historique). "
+                       "Ne l'appelle QU'APRÈS m'avoir montré la séance et obtenu mon accord "
+                       "explicite dans un message précédent.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "integer", "description": "L'id de la séance, donné par historique"},
+            },
+            "required": ["id"],
         },
     },
 ]
@@ -68,6 +100,8 @@ FONCTIONS = {
     "activites_recentes": activites_recentes,
     "noter_seance": noter_seance,
     "historique": historique,
+    "noter_ressenti": noter_ressenti,
+    "supprimer_seance": supprimer_seance,
 }
 
 SYSTEME = (
@@ -77,13 +111,16 @@ SYSTEME = (
 )
 
 
-def executer_outil(nom: str, arguments: dict) -> str:
-    """Exécute l'outil demandé par le LLM et renvoie le résultat en texte."""
+def executer_outil(nom: str, arguments: dict) -> tuple[str, str | None]:
+    """Exécute l'outil demandé par le LLM.
+    Renvoie le résultat en texte, et le message d'erreur éventuel (sinon None)."""
     try:
         resultat = FONCTIONS[nom](**arguments)
+        erreur = None
     except Exception as e:
         resultat = f"Erreur : {e}"
-    return json.dumps(resultat, ensure_ascii=False)
+        erreur = f"{nom} : {e}"
+    return json.dumps(resultat, ensure_ascii=False), erreur
 
 
 # 3. La boucle d'agent
@@ -92,7 +129,10 @@ def agent(messages: list, max_tours: int = 10) -> str:
     with open("prompt_coach.md", encoding="utf-8") as f:
         SYSTEME = f"Nous sommes le {date.today().isoformat()}.\n\n" + f.read()
 
-    for _ in range(max_tours):
+    demande = uuid.uuid4().hex[:8]  # identifiant de cette demande, pour regrouper ses appels
+
+    for tour in range(1, max_tours + 1):
+        debut = time.perf_counter()
         reponse = client.messages.create(
             model="claude-sonnet-5-5",
             max_tokens=4000,
@@ -100,10 +140,12 @@ def agent(messages: list, max_tours: int = 10) -> str:
             tools=OUTILS,
             messages=messages,
         )
+        duree = time.perf_counter() - debut
         messages.append({"role": "assistant", "content": reponse.content})
 
         # Le LLM n'a plus besoin d'outils : c'est sa réponse finale
         if reponse.stop_reason != "tool_use":
+            enregistrer(demande, tour, duree, reponse, outils=[], erreurs=[])
             texte = "".join(b.text for b in reponse.content if b.type == "text").strip()
             if not texte:
                 # Réponse vide : on dit pourquoi au lieu de renvoyer du vide
@@ -112,16 +154,21 @@ def agent(messages: list, max_tours: int = 10) -> str:
             return texte
 
         # Sinon, on exécute chaque outil demandé et on lui renvoie les résultats
-        resultats = []
+        resultats, outils_appeles, erreurs = [], [], []
         for bloc in reponse.content:
             if bloc.type == "tool_use":
                 print(f"🔧 {bloc.name}({bloc.input})")
+                contenu, erreur = executer_outil(bloc.name, bloc.input)
+                outils_appeles.append(bloc.name)
+                if erreur:
+                    erreurs.append(erreur)
                 resultats.append({
                     "type": "tool_result",
                     "tool_use_id": bloc.id,
-                    "content": executer_outil(bloc.name, bloc.input),
+                    "content": contenu,
                 })
         messages.append({"role": "user", "content": resultats})
+        enregistrer(demande, tour, duree, reponse, outils_appeles, erreurs)
 
     return "Je me suis arrêté : trop d'étapes."
 
